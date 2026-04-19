@@ -1,0 +1,152 @@
+local Players = game:GetService("Players")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+
+-- ================= CONFIGURAÇÃO GOD MODE =================
+local BASE_PREDICT = 0.22     -- Aumentado para reagir antes na velocidade da luz
+local PING_MAX_RADIUS = 120   -- Hitbox maior para bolas ultra rápidas
+local BLOCK_KEY = Enum.KeyCode.F
+local COOLDOWN = 0         -- Cooldown quase zero para trocas instantâneas
+-- =========================================================
+
+local enabled = false
+local busy = false
+
+-- ================= GUI (ESTILO ELITE) =================
+local gui = Instance.new("ScreenGui", player.PlayerGui)
+gui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.fromOffset(220, 120)
+frame.Position = UDim2.fromScale(0.5, 0.4)
+frame.AnchorPoint = Vector2.new(0.5, 0.5)
+frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+frame.BorderSizePixel = 0
+Instance.new("UICorner", frame)
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0, 35)
+title.BackgroundTransparency = 1
+title.Text = "GODSPEED AUTO BLOCK"
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+title.TextColor3 = Color3.fromRGB(0, 255, 255)
+
+local toggle = Instance.new("TextButton", frame)
+toggle.Size = UDim2.fromOffset(180, 45)
+toggle.Position = UDim2.fromOffset(20, 50)
+toggle.Text = "OFF"
+toggle.Font = Enum.Font.GothamBold
+toggle.TextSize = 18
+toggle.TextColor3 = Color3.new(1, 1, 1)
+toggle.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+Instance.new("UICorner", toggle)
+
+local visualHitbox = Instance.new("Part")
+visualHitbox.Shape = Enum.PartType.Ball
+visualHitbox.Transparency = 1
+visualHitbox.Color = Color3.fromRGB(0, 255, 255)
+visualHitbox.Material = Enum.Material.ForceField
+visualHitbox.CanCollide = false
+visualHitbox.Anchored = true
+visualHitbox.Parent = workspace
+
+-- Arrastar
+local dragging, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true dragStart = input.Position startPos = frame.Position end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+
+-- ================= LÓGICA DE ALTA FREQUÊNCIA =================
+
+local function darParry()
+    if busy then return end
+    busy = true
+    VirtualInputManager:SendKeyEvent(true, BLOCK_KEY, false, game)
+    task.wait(0.01) -- Clique ultra rápido
+    VirtualInputManager:SendKeyEvent(false, BLOCK_KEY, false, game)
+    task.wait(COOLDOWN)
+    busy = false
+end
+
+local function souOAlvo(bola)
+    local character = player.Character
+    if character then
+        local highlight = character:FindFirstChildOfClass("Highlight")
+        if highlight and (highlight.FillColor.R > 0.7 or highlight.OutlineColor.R > 0.7) then
+            return true
+        end
+    end
+    
+    -- Verifica as partículas vermelhas da bola
+    local redFolder = bola:FindFirstChild("Red")
+    if redFolder then
+        for _, p in ipairs(redFolder:GetChildren()) do
+            if p:IsA("ParticleEmitter") and p.Enabled then return true end
+        end
+    end
+    return false
+end
+
+-- Usando RenderStepped para a maior prioridade possível
+RunService.RenderStepped:Connect(function()
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not enabled then 
+        visualHitbox.Transparency = 1
+        return 
+    end
+    
+    visualHitbox.Position = root.Position
+    visualHitbox.Transparency = 0.85
+
+    local ballsFolder = workspace:FindFirstChild("Balls")
+    if not ballsFolder then return end
+
+    for _, bola in ipairs(ballsFolder:GetChildren()) do
+        if bola:IsA("BasePart") then
+            local ballPos = bola.Position
+            local ballVel = bola.AssemblyLinearVelocity
+            local speed = ballVel.Magnitude
+            
+            if speed < 2 then continue end
+
+            local directionToPlayer = (root.Position - ballPos).Unit
+            local isComing = ballVel.Unit:Dot(directionToPlayer) > 0.30 -- Mais sensível à direção
+            
+            if isComing and souOAlvo(bola) then
+                -- Previsão dinâmica para velocidade da luz
+                local currentPredict = math.clamp(BASE_PREDICT + (speed / 800), 0.15, 0.5)
+                local predictedPos = ballPos + (ballVel * currentPredict)
+                local distToPredicted = (predictedPos - root.Position).Magnitude
+                
+                local visualSize = math.clamp(distToPredicted * 2, 10, PING_MAX_RADIUS)
+                visualHitbox.Size = Vector3.new(visualSize, visualSize, visualSize)
+
+                -- Se a bola estiver vindo MUITO rápido, o parry sai por distância prevista
+                if distToPredicted < 15 or (ballPos - root.Position).Magnitude < 18 then
+                    darParry()
+                    visualHitbox.Color = Color3.fromRGB(255, 0, 0)
+                    task.delay(0.05, function() visualHitbox.Color = Color3.fromRGB(0, 255, 255) end)
+                    break
+                end
+            end
+        end
+    end
+end)
+
+toggle.MouseButton1Click:Connect(function()
+    enabled = not enabled
+    toggle.Text = enabled and "ON" or "OFF"
+    toggle.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 180) or Color3.fromRGB(180, 40, 40)
+end)
