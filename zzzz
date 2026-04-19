@@ -5,148 +5,143 @@ local UIS = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 
--- ================= CONFIGURAÇÃO GOD MODE =================
-local BASE_PREDICT = 0.22     -- Aumentado para reagir antes na velocidade da luz
-local PING_MAX_RADIUS = 120   -- Hitbox maior para bolas ultra rápidas
+-- ================= CONFIGURAÇÃO PARA "GAMEBALL" =================
+local PREDICT_TIME = 0.45      -- Aumentei um tiquinho para jogos mais rápidos
+local REACTION_ZONE = 30       
+local TP_KILL_ZONE = 24        -- Mantendo a "mina terrestre" contra TP
 local BLOCK_KEY = Enum.KeyCode.F
-local COOLDOWN = 0         -- Cooldown quase zero para trocas instantâneas
--- =========================================================
+local COOLDOWN_TIME = 0.22     
+-- ================================================================
 
 local enabled = false
 local busy = false
+local lastBallPos = Vector3.new()
 
--- ================= GUI (ESTILO ELITE) =================
+-- ================= GUI PADRÃO =================
 local gui = Instance.new("ScreenGui", player.PlayerGui)
 gui.ResetOnSpawn = false
 
 local frame = Instance.new("Frame", gui)
 frame.Size = UDim2.fromOffset(220, 120)
 frame.Position = UDim2.fromScale(0.5, 0.4)
-frame.AnchorPoint = Vector2.new(0.5, 0.5)
-frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-frame.BorderSizePixel = 0
+frame.BackgroundColor3 = Color3.fromRGB(20, 10, 10) -- Tom avermelhado para o novo jogo
 Instance.new("UICorner", frame)
 
 local title = Instance.new("TextLabel", frame)
 title.Size = UDim2.new(1, 0, 0, 35)
 title.BackgroundTransparency = 1
-title.Text = "GODSPEED AUTO BLOCK"
+title.Text = "GAMEBALL MULTI-TOOL"
 title.Font = Enum.Font.GothamBold
-title.TextSize = 14
-title.TextColor3 = Color3.fromRGB(0, 255, 255)
+title.TextColor3 = Color3.fromRGB(255, 50, 50)
 
 local toggle = Instance.new("TextButton", frame)
 toggle.Size = UDim2.fromOffset(180, 45)
 toggle.Position = UDim2.fromOffset(20, 50)
 toggle.Text = "OFF"
 toggle.Font = Enum.Font.GothamBold
-toggle.TextSize = 18
-toggle.TextColor3 = Color3.new(1, 1, 1)
-toggle.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+toggle.BackgroundColor3 = Color3.fromRGB(150, 0, 50)
 Instance.new("UICorner", toggle)
 
-local visualHitbox = Instance.new("Part")
+local visualHitbox = Instance.new("Part", workspace)
 visualHitbox.Shape = Enum.PartType.Ball
-visualHitbox.Transparency = 1
-visualHitbox.Color = Color3.fromRGB(0, 255, 255)
 visualHitbox.Material = Enum.Material.ForceField
 visualHitbox.CanCollide = false
 visualHitbox.Anchored = true
-visualHitbox.Parent = workspace
+visualHitbox.Transparency = 1
 
--- Arrastar
-local dragging, dragStart, startPos
-frame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true dragStart = input.Position startPos = frame.Position end
-end)
-UIS.InputChanged:Connect(function(input)
-    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-        local delta = input.Position - dragStart
-        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
-UIS.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+-- Dragging
+local dToggle, dStart, sPos
+frame.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dToggle = true dStart = i.Position sPos = frame.Position end end)
+UIS.InputChanged:Connect(function(i) if dToggle then local delta = i.Position - dStart frame.Position = UDim2.new(sPos.X.Scale, sPos.X.Offset + delta.X, sPos.Y.Scale, sPos.Y.Offset + delta.Y) end end)
+UIS.InputEnded:Connect(function() dToggle = false end)
 
--- ================= LÓGICA DE ALTA FREQUÊNCIA =================
+-- ================= LÓGICA DE DEFESA =================
 
-local function darParry()
+local function executarClique()
     if busy then return end
     busy = true
     VirtualInputManager:SendKeyEvent(true, BLOCK_KEY, false, game)
-    task.wait(0.01) -- Clique ultra rápido
+    task.wait(0.01)
     VirtualInputManager:SendKeyEvent(false, BLOCK_KEY, false, game)
-    task.wait(COOLDOWN)
+    task.wait(COOLDOWN_TIME)
     busy = false
 end
 
-local function souOAlvo(bola)
-    local character = player.Character
-    if character then
-        local highlight = character:FindFirstChildOfClass("Highlight")
-        if highlight and (highlight.FillColor.R > 0.7 or highlight.OutlineColor.R > 0.7) then
-            return true
+local function verificarAlvo(bola)
+    local char = player.Character
+    if not char then return false end
+    
+    -- Checa se você está vermelho (Highlight)
+    local h = char:FindFirstChildOfClass("Highlight")
+    local isTargeted = h and (h.FillColor.R > 0.4 or h.OutlineColor.R > 0.4)
+    
+    -- Checa se a bola está em modo de ataque (Partícula Red)
+    local red = bola:FindFirstChild("Red")
+    local ballAttack = false
+    if red then
+        for _, p in ipairs(red:GetChildren()) do
+            if p:IsA("ParticleEmitter") and p.Enabled then ballAttack = true break end
         end
     end
     
-    -- Verifica as partículas vermelhas da bola
-    local redFolder = bola:FindFirstChild("Red")
-    if redFolder then
-        for _, p in ipairs(redFolder:GetChildren()) do
-            if p:IsA("ParticleEmitter") and p.Enabled then return true end
-        end
-    end
-    return false
+    return isTargeted or ballAttack
 end
 
--- Usando RenderStepped para a maior prioridade possível
-RunService.RenderStepped:Connect(function()
-    local char = player.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
+RunService.Heartbeat:Connect(function()
+    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     if not root or not enabled then 
         visualHitbox.Transparency = 1
         return 
     end
     
     visualHitbox.Position = root.Position
-    visualHitbox.Transparency = 0.85
+    visualHitbox.Transparency = 0.8
+    visualHitbox.Color = Color3.fromRGB(255, 50, 50)
 
-    local ballsFolder = workspace:FindFirstChild("Balls")
-    if not ballsFolder then return end
+    -- AJUSTE: Procura a bola direto no Workspace pelo nome "GameBall"
+    local bola = workspace:FindFirstChild("GameBall")
+    
+    if bola and bola:IsA("BasePart") then
+        local ballPos = bola.Position
+        local velocity = bola.AssemblyLinearVelocity
+        local speed = velocity.Magnitude
+        local dist = (ballPos - root.Position).Magnitude
+        
+        local moveDir = (lastBallPos ~= Vector3.new()) and (ballPos - lastBallPos).Unit or velocity.Unit
+        lastBallPos = ballPos
 
-    for _, bola in ipairs(ballsFolder:GetChildren()) do
-        if bola:IsA("BasePart") then
-            local ballPos = bola.Position
-            local ballVel = bola.AssemblyLinearVelocity
-            local speed = ballVel.Magnitude
-            
-            if speed < 2 then continue end
+        if verificarAlvo(bola) then
+            -- ANTI-TP ZONE (A "Mina Terrestre")
+            if dist < TP_KILL_ZONE then
+                visualHitbox.Color = Color3.fromRGB(255, 255, 255)
+                executarClique()
+                return
+            end
 
-            local directionToPlayer = (root.Position - ballPos).Unit
-            local isComing = ballVel.Unit:Dot(directionToPlayer) > 0.30 -- Mais sensível à direção
-            
-            if isComing and souOAlvo(bola) then
-                -- Previsão dinâmica para velocidade da luz
-                local currentPredict = math.clamp(BASE_PREDICT + (speed / 800), 0.15, 0.5)
-                local predictedPos = ballPos + (ballVel * currentPredict)
-                local distToPredicted = (predictedPos - root.Position).Magnitude
+            -- PREDIÇÃO HÍBRIDA
+            if speed > 10 then
+                local toPlayer = (root.Position - ballPos).Unit
+                local dot = moveDir:Dot(toPlayer)
                 
-                local visualSize = math.clamp(distToPredicted * 2, 10, PING_MAX_RADIUS)
-                visualHitbox.Size = Vector3.new(visualSize, visualSize, visualSize)
+                local hitboxSize = math.clamp(speed * 0.4, 20, 180)
+                visualHitbox.Size = visualHitbox.Size:Lerp(Vector3.new(hitboxSize, hitboxSize, hitboxSize), 0.2)
 
-                -- Se a bola estiver vindo MUITO rápido, o parry sai por distância prevista
-                if distToPredicted < 15 or (ballPos - root.Position).Magnitude < 18 then
-                    darParry()
-                    visualHitbox.Color = Color3.fromRGB(255, 0, 0)
-                    task.delay(0.05, function() visualHitbox.Color = Color3.fromRGB(0, 255, 255) end)
-                    break
+                if dot > 0.1 then
+                    local timeToImpact = dist / speed
+                    if timeToImpact < PREDICT_TIME or dist < REACTION_ZONE then
+                        visualHitbox.Color = Color3.fromRGB(255, 255, 255)
+                        executarClique()
+                    end
                 end
             end
         end
+    else
+        lastBallPos = Vector3.new()
     end
 end)
 
 toggle.MouseButton1Click:Connect(function()
     enabled = not enabled
     toggle.Text = enabled and "ON" or "OFF"
-    toggle.BackgroundColor3 = enabled and Color3.fromRGB(0, 180, 180) or Color3.fromRGB(180, 40, 40)
+    toggle.BackgroundColor3 = enabled and Color3.fromRGB(0, 150, 100) or Color3.fromRGB(150, 0, 50)
 end)
